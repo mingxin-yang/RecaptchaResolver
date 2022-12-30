@@ -20,3 +20,11 @@ def get_question_id_by_target_name(target_name):
     question_id = CAPTCHA_TARGET_NAME_QUESTION_ID_MAPPING.get(target_name)
     logger.debug(f'question_id {question_id}')
     return question_id
+
+
+def to_base64_image(filename):
+    with open(filename, "rb") as f:
+        data = f.read()
+        encoded_string = base64.b64encode(data)
+        return encoded_string.decode('utf-8')
+

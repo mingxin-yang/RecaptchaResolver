@@ -1,6 +1,8 @@
+import json
 from typing import List, Union
 import requests
 from selenium import webdriver
+from selenium.common import NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
@@ -16,6 +18,17 @@ class Solution(object):
     def __init__(self, url):
         self.browser = webdriver.Chrome()
         self.browser.get(url)
+        try:
+            with open('cookies.json', 'r') as f:
+                cookies = json.load(f)
+            # {'CONSENT': 'YES+srp.gws'} to {"name": "CONSENT", "value": "YES+srp.gws"} for selenium
+
+            for cookie in cookies:
+                self.browser.add_cookie(cookie)
+            self.browser.refresh()
+        except json.decoder.JSONDecodeError:
+            pass
+
         self.wait = WebDriverWait(self.browser, 10)
         self.captcha_resolver = CaptchaResolver()
 
@@ -25,12 +38,12 @@ class Solution(object):
 
     def get_all_frames(self) -> List[WebElement]:
         self.browser.switch_to.default_content()
-        return self.browser.find_elements_by_tag_name('iframe')
+        return self.browser.find_elements(By.TAG_NAME, 'iframe')
 
     def get_captcha_entry_iframe(self) -> WebElement:
         self.browser.switch_to.default_content()
-        captcha_entry_iframe = self.browser.find_element_by_css_selector(
-            'iframe[title="reCAPTCHA"]')
+        captcha_entry_iframe = self.browser.find_element(By.CSS_SELECTOR,
+                                                         'iframe[title="reCAPTCHA"]')
         return captcha_entry_iframe
 
     def switch_to_captcha_entry_iframe(self) -> None:
@@ -39,8 +52,8 @@ class Solution(object):
 
     def get_captcha_content_iframe(self) -> WebElement:
         self.browser.switch_to.default_content()
-        captcha_content_iframe = self.browser.find_element_by_css_selector(
-            'iframe[src*="bframe?"]')
+        captcha_content_iframe = self.browser.find_element(By.CSS_SELECTOR,
+                                                           'iframe[src*="bframe?"]')
         return captcha_content_iframe
 
     def switch_to_captcha_content_iframe(self) -> None:
@@ -97,8 +110,8 @@ class Solution(object):
             logger.debug(f'no new single captcha displayed')
             return
         logger.debug('new single captcha displayed')
-        single_captcha_url = single_captcha_element.find_element_by_css_selector(
-            'img').get_attribute('src')
+        single_captcha_url = single_captcha_element.find_element(By.CSS_SELECTOR,
+                                                                 'img').get_attribute('src')
         logger.debug(f'single_captcha_url {single_captcha_url}')
         with open(CAPTCHA_SINGLE_IMAGE_FILE_PATH, 'wb') as f:
             f.write(requests.get(single_captcha_url).content)
@@ -128,18 +141,22 @@ class Solution(object):
             "return document.querySelector('div.rc-imageselect-incorrect-response')?.text")
 
     def get_is_successful(self):
-        self.switch_to_captcha_entry_iframe()
-        anchor: WebElement = self.wait.until(EC.visibility_of_element_located((
-            By.ID, 'recaptcha-anchor'
-        )))
-        checked = anchor.get_attribute('aria-checked')
-        logger.debug(f'checked {checked}')
-        return str(checked) == 'true'
+        try:
+            self.switch_to_captcha_entry_iframe()
+            anchor: WebElement = self.wait.until(EC.visibility_of_element_located((
+                By.ID, 'recaptcha-anchor'
+            )))
+            checked = anchor.get_attribute('aria-checked')
+            logger.debug(f'checked {checked}')
+            return str(checked) == 'true'
+        except Exception as e:
+            logger.error(f'get_is_successful error {e}')
+            return True
 
     def get_is_failed(self):
         return bool(self.get_verify_error_info())
 
-    def verify_entire_captcha(self):
+    def verify_entire_captcha(self) -> str:
         self.entire_captcha_natural_width = self.get_entire_captcha_natural_width()
         logger.debug(
             f'entire_captcha_natural_width {self.entire_captcha_natural_width}'
@@ -149,8 +166,8 @@ class Solution(object):
             f'captcha_target_name {self.captcha_target_name}'
         )
         entire_captcha_element: WebElement = self.get_entire_captcha_element()
-        entire_captcha_url = entire_captcha_element.find_element_by_css_selector(
-            'td img').get_attribute('src')
+        entire_captcha_url = entire_captcha_element.find_element(By.CSS_SELECTOR,
+                                                                 'td img').get_attribute('src')
         logger.debug(f'entire_captcha_url {entire_captcha_url}')
         with open(CAPTCHA_ENTIRE_IMAGE_FILE_PATH, 'wb') as f:
             f.write(requests.get(entire_captcha_url).content)
@@ -170,16 +187,14 @@ class Solution(object):
             return
         recognized_indices = entire_captcha_recognize_result.get(
             'solution', {}).get('objects')
-        if not recognized_indices:
-            logger.error('count not get captcha recognized indices')
-            return
-        single_captcha_elements = self.wait.until(EC.visibility_of_all_elements_located(
-            (By.CSS_SELECTOR, '#rc-imageselect-target table td')))
-        for recognized_index in recognized_indices:
-            single_captcha_element: WebElement = single_captcha_elements[recognized_index]
-            single_captcha_element.click()
-            # check if need verify single captcha
-            self.verify_single_captcha(recognized_index)
+        if recognized_indices:
+            single_captcha_elements = self.wait.until(EC.visibility_of_all_elements_located(
+                (By.CSS_SELECTOR, '#rc-imageselect-target table td')))
+            for recognized_index in recognized_indices:
+                single_captcha_element: WebElement = single_captcha_elements[recognized_index]
+                single_captcha_element.click()
+                # check if need verify single captcha
+                self.verify_single_captcha(recognized_index)
 
         # after all captcha clicked
         verify_button: WebElement = self.get_verify_button()
@@ -195,6 +210,52 @@ class Solution(object):
             logger.debug(f'verify_error_info {verify_error_info}')
             self.verify_entire_captcha()
 
+        cookies = self.browser.get_cookies()
+        with open('cookies.json', 'w') as f:
+            json.dump(cookies, f)
+        # check if text verify
+        self.browser.switch_to.default_content()
+        return self.resolve_image_captcha()
+
+    def resolve_image_captcha(self) -> str:
+
+        source = self.browser.page_source
+
+        try:
+            image = self.browser.find_element(By.CSS_SELECTOR, 'form#captcha-form img')
+
+            captcha_recognize_result = self.captcha_resolver.create_ocr_task(image.screenshot_as_base64)
+            if not captcha_recognize_result:
+                logger.error('count not get captcha recognize result')
+                return ""
+            recognized_text = captcha_recognize_result.get(
+                'solution', {}).get('text')
+            if not recognized_text:
+                logger.error('count not get captcha recognized text')
+                return ""
+            logger.debug(f'recognized_text {recognized_text}')
+            text_input: WebElement = self.browser.find_element(By.CSS_SELECTOR, 'form#captcha-form input')
+            text_input.send_keys(recognized_text)
+            submit_button: WebElement = self.browser.find_element(By.CSS_SELECTOR, 'input[type="submit"]')
+            submit_button.click()
+            time.sleep(3)
+            source = self.browser.page_source
+            cookies = self.browser.get_cookies()
+            # 保存cookies到文件
+            with open('cookies.json', 'w') as f:
+                json.dump(cookies, f)
+            logger.debug('saved cookies to cookies.json')
+            return source
+        except NoSuchElementException as e:
+            logger.debug(f'NoSuchElementException, {e}, success')
+            # logger.debug(f'source {source}')
+            return source
+
     def resolve(self):
-        self.trigger_captcha()
-        self.verify_entire_captcha()
+        try:
+            self.trigger_captcha()
+            return self.verify_entire_captcha()
+        except Exception as e:
+            logger.debug(f'error {e}')
+            logger.info('resole image captcha')
+            return self.resolve_image_captcha()

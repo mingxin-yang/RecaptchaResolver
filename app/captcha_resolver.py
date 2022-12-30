@@ -28,3 +28,21 @@ class CaptchaResolver(object):
         except requests.RequestException:
             logger.exception(
                 'error occurred while recognizing captcha', exc_info=True)
+
+    def create_ocr_task(self, image_base64_string):
+        logger.debug('start to recognize image for ocr')
+        data = {
+            "clientKey": self.api_key,
+            "task": {
+                "type": "ImageToTextTaskTest",
+                "body": image_base64_string,
+            }
+        }
+        try:
+            response = requests.post(self.api_url, json=data)
+            result = response.json()
+            logger.debug(f'captcha recogize result {result}')
+            return result
+        except requests.RequestException:
+            logger.exception(
+                'error occurred while recognizing captcha ocr ', exc_info=True)
